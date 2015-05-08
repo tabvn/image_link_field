@@ -1,0 +1,308 @@
+<?php
+
+/**
+ * 
+ * Implements of hook_field_widget_info_alter()
+ */
+function image_link_field_field_info_alter(&$info) {
+  $info['image']['instance_settings']['link_field'] = 0;
+}
+
+function image_link_field_field_create_instance($instance) {
+  if (!empty($instance['field_name']) && !empty($instance['entity_type']) && !empty($instance['bundle'])) {
+    $field = field_info_field($instance['field_name']);
+    $field_info = field_info_instance($instance['entity_type'], $instance['field_name'], $instance['bundle']);
+    if (isset($field['type']) && $field['type'] == 'image') {
+      $spec = array(
+          'description' => t('Privide URL for image item'),
+          'type' => 'varchar',
+          'length' => 1024,
+          'not null' => FALSE,
+      );
+      $table = _field_sql_storage_tablename($field);
+      $field_name = $field['field_name'] . '_link';
+
+      if (!db_field_exists($table, $field_name)) {
+        db_add_field($table, $field_name, $spec);
+      }
+    }
+  }
+}
+
+function image_link_field_field_update_field($field, $prior_field, $has_data) {
+  if (isset($field['type']) && $field['type'] == 'image') {
+    $spec = array(
+        'description' => t('Privide URL for image item'),
+        'type' => 'varchar',
+        'length' => 1024,
+        'not null' => FALSE,
+    );
+    $table = _field_sql_storage_tablename($field);
+    $field_name = $field['field_name'] . '_link';
+    if (!db_field_exists($table, $field_name)) {
+      db_add_field($table, $field_name, $spec);
+    }
+  }
+}
+
+/**
+ * Implements of hook_field_form_alter()
+ */
+function image_link_field_form_alter(&$form, &$form_state, $form_id) {
+  if ($form_id == 'field_ui_field_edit_form') {
+    if (isset($form['#field']['type']) && $form['#field']['type'] == 'image') {
+      $form['instance']['settings']['link_field'] = array(
+          '#type' => 'checkbox',
+          '#title' => t('Enable link field'),
+          '#default_value' => isset($form['#instance']['settings']['link_field']) ? $form['#instance']['settings']['link_field'] : 0,
+          '#weight' => 12,
+      );
+    }
+  }
+}
+
+function image_link_field_entity_update($entity, $type) {
+  // Insert the new entity into a fictional table of all entities.
+  $fields_images = array();
+  $info = field_info_instances($type);
+  list($id, $vid, $bundle) = entity_extract_ids($type, $entity);
+  if (!empty($info)) {
+    foreach ($info as $entity_type => $fields) {
+      if (!empty($fields)) {
+        foreach ($fields as $k => $v) {
+          if (isset($v['settings']['link_field'])) {
+            $fields_images[] = $v['field_name'];
+          }
+        }
+      }
+    }
+  }
+
+  if (!empty($fields_images) && !empty($entity->bundle)) {
+    foreach ($fields_images as $f) {
+      $field = field_info_field($f);
+      $table = _field_sql_storage_tablename($field);
+      $column = $field['field_name'] . '_link';
+      $bundle = $entity->bundle;
+      $field_info = field_info_instance($type, $f, $bundle);
+      if (isset($field_info['settings']['link_field'])) {
+        $field_items = field_get_items($type, $entity, $f);
+        if (!empty($field_items)) {
+          foreach ($field_items as $delta => $item) {
+            db_update($table) // Table name no longer needs {}
+                    ->fields(array(
+                        $column => isset($item['link']) ? $item['link'] : ''
+                    ))
+                    ->condition('entity_type', $type)
+                    ->condition('entity_id', $id)
+                    ->condition('delta', $delta)
+                    ->execute();
+          }
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Implements of hook_field_widget_form_alter()
+ */
+function image_link_field_field_widget_form_alter(&$element, &$form_state, $context) {
+
+//  dsm($context);
+  // Add a css class to widget form elements for all fields of type mytype.
+  if ($context['field']['type'] == 'image') {
+    // Be sure not to overwrite existing attributes.
+    //dsm($field_get_items);
+    if (!empty($element)) {
+
+      foreach (element_children($element) as $delta) {
+
+        if (!empty($element[$delta]['#entity_type']) && !empty($element[$delta]['#entity']) && !empty($element[$delta]['#field_name']) && !empty($element[$delta]['#bundle'])) {
+          $type = $element[$delta]['#entity_type'];
+          $entity = $element[$delta]['#entity'];
+          $f_name = $element[$delta]['#field_name'];
+          $bunder = $element[$delta]['#bundle'];
+
+          $field_info = field_info_instance($type, $f_name, $bunder);
+          if (isset($field_info['settings']['link_field'])) {
+            $field = field_info_field($f_name);
+            $table = _field_sql_storage_tablename($field);
+            $column = $field['field_name'] . '_link';
+            list($id, $vid, $bundle) = entity_extract_ids($type, $entity);
+            $result = _image_link_field_get_link($f_name, $type, $entity, $delta);
+            $element[$delta]['#default_value']['link'] = isset($result) ? $result : '';
+          }
+        }
+
+
+
+        $element[$delta]['#process'][] = 'image_link_field_widget_process';
+      }
+    }
+  }
+}
+
+function _image_link_field_get_link($field_name, $entity_type, $entity, $delta) {
+  $field = field_info_field($field_name);
+
+  $table = _field_sql_storage_tablename($field);
+  $column = $field['field_name'] . '_link';
+
+  list($id, $vid, $bundle) = entity_extract_ids($entity_type, $entity);
+
+  $result = db_select($table, 'f')
+          ->fields('f', array($column))
+          ->condition('entity_id', $id)
+          ->condition('entity_type', $entity_type)
+          ->condition('delta', $delta)
+          ->execute()
+          ->fetchField();
+
+
+  return $result;
+}
+
+function image_link_field_widget_process($element, &$form_state, $form) {
+
+  $item = $element['#value'];
+
+  $instance = field_widget_instance($element, $form_state);
+  $settings = $instance['settings'];
+
+  $element['#theme'] = 'image_link_field_image_widget';
+
+  $element['link'] = array(
+      '#type' => 'textfield',
+      '#title' => t('URL'),
+      '#default_value' => isset($item['link']) ? $item['link'] : '',
+      '#description' => t('Enter your URL.'),
+      '#maxlength' => 1024,
+      '#weight' => -1,
+      '#access' => (bool) $item['fid'] && $settings['link_field'],
+  );
+
+  return $element;
+}
+
+/**
+ * Implements of hook_theme_registry_alter()
+ */
+function image_link_field_theme_registry_alter(&$theme_registry) {
+
+  if (isset($theme_registry['image_widget'])) {
+    $theme_registry['image_widget']['function'] = 'theme_image_link_field_image_widget';
+  }
+  if (isset($theme_registry['image_formatter'])) {
+    $theme_registry['image_formatter']['function'] = 'theme_image_link_field_image_formatter';
+  }
+}
+
+/**
+ * Implements hook_theme().
+ */
+function image_link_field_theme() {
+  return array(
+      'image_link_field_image_widget' => array(
+          'render element' => 'element',
+      ),
+  );
+}
+
+function theme_image_link_field_image_widget($variables) {
+  $element = $variables['element'];
+  $output = '';
+  $output .= '<div class="image-widget form-managed-file clearfix">';
+
+  if (isset($element['preview'])) {
+    $output .= '<div class="image-preview">';
+    $output .= drupal_render($element['preview']);
+    $output .= '</div>';
+  }
+
+  $output .= '<div class="image-widget-data">';
+  if ($element['fid']['#value'] != 0) {
+    $element['filename']['#markup'] .= ' <span class="file-size">(' . format_size($element['#file']->filesize) . ')</span> ';
+  }
+  $output .= drupal_render_children($element);
+  $output .= '</div>';
+  $output .= '</div>';
+
+  return $output;
+}
+
+function theme_image_link_field_image_formatter($variables) {
+
+  $item = $variables['item'];
+  $image = array(
+      'path' => $item['uri'],
+  );
+
+  if (array_key_exists('alt', $item)) {
+    $image['alt'] = $item['alt'];
+  }
+
+  if (isset($item['attributes'])) {
+    $image['attributes'] = $item['attributes'];
+  }
+
+  if (isset($item['width']) && isset($item['height'])) {
+    $image['width'] = $item['width'];
+    $image['height'] = $item['height'];
+  }
+
+  // Do not output an empty 'title' attribute.
+  if (isset($item['title']) && drupal_strlen($item['title']) > 0) {
+    $image['title'] = $item['title'];
+  }
+
+  if ($variables['image_style']) {
+    $image['style_name'] = $variables['image_style'];
+    $output = theme('image_style', $image);
+  } else {
+    $output = theme('image', $image);
+  }
+
+  // The link path and link options are both optional, but for the options to be
+  // processed, the link path must at least be an empty string.
+  if (isset($variables['path']['path'])) {
+    $path = $variables['path']['path'];
+    $options = isset($variables['path']['options']) ? $variables['path']['options'] : array();
+    // When displaying an image inside a link, the html option must be TRUE.
+    $options['html'] = TRUE;
+    $output = l($output, $path, $options);
+  }
+
+  if (isset($item['link']) && !empty($item['link'])) {
+
+    $output = l($output, $item['link'], array('html' => TRUE));
+  }
+
+
+  return $output;
+}
+
+function image_link_field_field_attach_view_alter(&$output, $context) {
+  if (!empty($output)) {
+    foreach (element_children($output) as $key) {
+      $element = $output[$key];
+      if (isset($element['#field_type']) && $element['#field_type'] == 'image') {
+        if (!empty($element)) {
+          if (!empty($context['entity']) && !empty($context['entity_type']) && !empty($output['#bundle'])) {
+            $type = $context['entity_type'];
+            $entity = $context['entity'];
+            $bunder = $output['#bundle'];
+            $field_name = $element['#field_name'];
+            foreach (element_children($element) as $delta) {
+              $field_info = field_info_instance($type, $field_name, $bunder);
+              if (isset($field_info['settings']['link_field'])) {
+                $link = _image_link_field_get_link($field_name, $type, $entity, $delta);
+                $output[$key][$delta]['#item']['link'] = $link;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,5 @@
+name = Image link field
+core = 7.x
+description = Allow add link each image upload
+package = Tabvn
+dependencies[] = image
